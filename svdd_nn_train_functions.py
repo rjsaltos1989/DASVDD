@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 from torch import nn
 from nn_models import AutoEncoder
 from tqdm.autonotebook import tqdm
@@ -8,39 +7,28 @@ import pandas as pd
 import time
 
 
-def deep_svdd_loss(phi_x, sph_center, sph_radius, nu, d_svdd_type):
+def deep_svdd_loss(phi_x, sph_center):
     """
-    Compute the Deep SVDD loss.
+    Compute the One-class Deep SVDD loss.
 
     :param phi_x: a torch tensor with the projection of the input data onto the latent space.
     :param sph_center: a torch tensor with the center of the hypersphere.
-    :param sph_radius: a torch tensor with the radius of the hypersphere.
-    :param nu: a float indicating the hyperparameter nu (only for soft-boundary D-SVDD). Must be in [0,1].
-    :param d_svdd_type: a string indicating the type of D-SVDD: 'one-class' o 'soft-boundary'
     :return: loss: a torch tensor with the Deep SVDD loss.
     """
 
     # Compute the distances of phi(x,W) to the sphere center.
     dist = torch.sum((phi_x - sph_center) ** 2, dim=1)
 
-    # Compute the loss value
-    if d_svdd_type == 'soft-boundary':
-        scores = dist - sph_radius ** 2
-        loss = sph_radius ** 2 + (1 / nu) * torch.mean(F.relu(scores))
-    else:  # 'one-class'
-        loss = torch.mean(dist)
-
-    return loss
+    return torch.mean(dist)
 
 
-def init_center(model, data_loader, device, eps=0.1):
+def init_center(model, data_loader, device):
     """
     Initialize hypersphere center as the mean from an initial forward pass on the data.
 
     :param model: a Pytorch model.
     :param data_loader: a Pytorch DataLoader.
     :param device: a string specifying the device to use.
-    :param eps: a float specifying a minimum value for adjusting the center. Defaults to 0.1.
     :return sph_center: a torch tensor with the center of the hypersphere.
     """
     n_samples = 0
@@ -56,45 +44,7 @@ def init_center(model, data_loader, device, eps=0.1):
 
     sph_center /= n_samples
 
-    # If sph_center is too close to 0, set to +-eps.
-    # Reason: a zero unit can be trivially matched with zero weights.
-    sph_center[(abs(sph_center) < eps) & (sph_center < 0)] = -eps
-    sph_center[(abs(sph_center) < eps) & (sph_center > 0)] = eps
-
     return sph_center
-
-
-def get_radius(model, data_loader, sph_center, nu, device):
-    """
-    Compute the sphere radius using the (1 - nu) quantile of distances from the center.
-
-    :param model: a Pytorch model.
-    :param data_loader: a Pytorch DataLoader.
-    :param sph_center: a torch tensor with the center of the hypersphere.
-    :param nu: a float indicating the hyperparameter nu (only for soft-boundary D-SVDD). Must be in [0,1].
-    :param device: a string specifying the device to use.
-    :return sph_radius: a tensor with the radius of the hypersphere.
-    """
-    dist_list = []
-    model.eval()
-
-    with torch.no_grad():
-        for inputs, _ in data_loader:
-            # Get the mini-batch
-            inputs = inputs.to(device)
-            phi_x = model.encoder(inputs)
-
-            # Compute the distance to the sphere center
-            dist = torch.sum((phi_x - sph_center) ** 2, dim=1).sqrt()
-            dist_list.append(dist.cpu())
-
-    # Concatenate all distances
-    all_dist = torch.cat(dist_list)
-
-    # Compute the (1 - nu) quantile
-    sph_radius = torch.quantile(all_dist, 1 - nu)
-
-    return sph_radius
 
 
 def set_gamma(layer_sizes, data_loader, device, num_T=10):
@@ -143,8 +93,8 @@ def set_gamma(layer_sizes, data_loader, device, num_T=10):
     return gamma.item()
 
 
-def run_d_svdd_epoch(model, optimizer, data_loader, ae_loss_fn, svdd_loss_fn, sph_center, sph_radius, nu, gamma,
-                     d_svdd_type, results, device, prefix=""):
+def run_d_svdd_epoch(model, optimizer, data_loader, ae_loss_fn, svdd_loss_fn, sph_center,
+                     gamma, results, device, prefix=""):
     """
     Runs one epoch of training or testing for deep SVDD.
 
@@ -156,10 +106,7 @@ def run_d_svdd_epoch(model, optimizer, data_loader, ae_loss_fn, svdd_loss_fn, sp
     :param ae_loss_fn: a Pytorch loss function. This is the autoencoder loss.
     :param svdd_loss_fn: a Pytorch loss function.
     :param sph_center: a torch tensor with the center of the hypersphere.
-    :param sph_radius: a torch tensor with the radius of the hypersphere.
-    :param nu: a float indicating the hyperparameter nu (only for soft-boundary D-SVDD). Must be in [0,1].
     :param gamma: a float indicating the weight of the SVDD loss in the total loss.
-    :param d_svdd_type: a string indicating the type of D-SVDD: 'one-class' o 'soft-boundary'
     :param results: a dictionary to store the results.
     :param device: a string specifying the device to use.
     :param prefix: a optional string to describe the results.
@@ -184,7 +131,7 @@ def run_d_svdd_epoch(model, optimizer, data_loader, ae_loss_fn, svdd_loss_fn, sp
         phi_x = model.encoder(inputs)
 
         # Compute loss.
-        svdd_loss = svdd_loss_fn(phi_x, sph_center, sph_radius=sph_radius, nu=nu, d_svdd_type=d_svdd_type)
+        svdd_loss = svdd_loss_fn(phi_x, sph_center)
         ae_loss = ae_loss_fn(x_hat, labels)
         loss = ae_loss + gamma * svdd_loss
 
@@ -206,9 +153,9 @@ def run_d_svdd_epoch(model, optimizer, data_loader, ae_loss_fn, svdd_loss_fn, sp
     return end - start
 
 
-def train_d_svdd_network(model, ae_loss_fn, svdd_loss_fn, train_loader,
-                         nu=0.05, gamma = 1, d_svdd_type='soft-boundary', init_lr=0.001, min_lr=0.0001,
-                         epochs=50, device='cpu', lr_schedule=None, checkpoint_file=None):
+def train_d_svdd_network(model, ae_loss_fn, svdd_loss_fn, train_loader, gamma = 1,
+                         init_lr=0.001, min_lr=0.0001, epochs=50, device='cpu',
+                         lr_schedule=None, checkpoint_file=None):
     """
     Train a D-SVDD neural network using AdamW as a optimizer.
 
@@ -219,9 +166,7 @@ def train_d_svdd_network(model, ae_loss_fn, svdd_loss_fn, train_loader,
     :param ae_loss_fn: a Pytorch loss function for the autoencoder.
     :param svdd_loss_fn: a Pytorch loss function for the SVDD.
     :param train_loader: a DataLoader for the training set.
-    :param nu: % of data points to leave outside the sphere. Must be in [0,1]. Defaults to 0.05.
     :param gamma: a float indicating the weight of the SVDD loss in the total loss. Defaults to 1.
-    :param d_svdd_type: a string with the type of D-SVDD: 'one-class' o 'soft-boundary'. Defaults to 'soft-boundary'.
     :param init_lr: the initial learning rate. Defaults to 0.001.
     :param min_lr: the minimum learning rate. Defaults to 0.0001.
     :param epochs: the number of epochs to train for. Defaults to 50.
@@ -233,10 +178,6 @@ def train_d_svdd_network(model, ae_loss_fn, svdd_loss_fn, train_loader,
 
     # Initialize the information to be tracked
     to_track = ["epoch", "total time", "train loss"]
-
-    # If we have soft-boundary D-SVDD, we want to track the radius
-    if d_svdd_type == 'soft-boundary':
-        to_track.append("sph_radius")
 
     # Keep track of the total training time
     total_train_time = 0
@@ -277,9 +218,6 @@ def train_d_svdd_network(model, ae_loss_fn, svdd_loss_fn, train_loader,
     # Initialize hypersphere center
     sph_center = init_center(model, train_loader, device)
 
-    # Initialize hypersphere radius
-    sph_radius = torch.tensor(0, device=device)
-
     # Run the training loop
     for epoch in tqdm(range(epochs), desc="Epoch"):
 
@@ -287,26 +225,16 @@ def train_d_svdd_network(model, ae_loss_fn, svdd_loss_fn, train_loader,
         model = model.train()
 
         # Run an epoch of training
-        total_train_time += run_d_svdd_epoch(model, optimizer, train_loader, ae_loss_fn, svdd_loss_fn, sph_center, sph_radius,
-                                             nu, gamma, d_svdd_type, results, device, prefix="train")
+        total_train_time += run_d_svdd_epoch(model, optimizer, train_loader, ae_loss_fn, svdd_loss_fn, sph_center,
+                                             gamma, results, device, prefix="train")
 
         # Update the sphere center every k epochs
         if epoch % 4 == 0:
             sph_center = init_center(model, train_loader, device)
 
-        # Update hypersphere radius R
-        if d_svdd_type == 'soft-boundary' and epoch % 4 == 0:
-            sph_radius = get_radius(model, train_loader, sph_center, nu, device)
-
-        # Compute the hypersphere radius R
-        if d_svdd_type == 'one-class' and epoch == epochs-1:
-            sph_radius = get_radius(model, train_loader, sph_center, nu, device)
-
         # Update the results
         results["total time"].append(total_train_time)
         results["epoch"].append(epoch)
-        if d_svdd_type == 'soft-boundary':
-            results["sph_radius"].append(sph_radius.item())
 
         # Update the learning rate after every epoch if provided
         if scheduler is not None:
@@ -326,4 +254,4 @@ def train_d_svdd_network(model, ae_loss_fn, svdd_loss_fn, train_loader,
             }, checkpoint_file)
 
     # Return the results as a pandas DataFrame
-    return pd.DataFrame.from_dict(results), sph_center, sph_radius
+    return pd.DataFrame.from_dict(results), sph_center

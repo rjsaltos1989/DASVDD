@@ -24,19 +24,17 @@ device = torch.device("cpu")
 
 # %%Importing the data
 #----------------------------------------------------------------------------------
-dataset_file = 'TwoMoons12D.mat'
+dataset_file = 'shuttle.mat'
 data_path = os.path.join('data', dataset_file)
 
 # Load data
 mat_data = sio.loadmat(data_path)
 data = mat_data['Data']
-labels = mat_data['y'].ravel() == 2
+labels = mat_data['y'].ravel() == 1
 
 # Data dimensionality
 num_obs, in_dim = data.shape
 
-# Sphere penalty parameter
-nu = 0.05
 
 # %%Data Preparation
 #----------------------------------------------------------------------------------
@@ -48,14 +46,14 @@ test_dataset = TensorDataset(torch.tensor(data, dtype=torch.float32),
                              torch.tensor(labels, dtype=torch.float32))
 
 # Create a DataLoader for each dataset
-batch_size = 32
+batch_size = 64
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # %%Model Configuration
 #----------------------------------------------------------------------------------
-latent_dim = 2
-layer_sizes = [in_dim, 10, 8, 4, latent_dim]
+latent_dim = 3
+layer_sizes = [in_dim, 7, 5, latent_dim]
 gamma = set_gamma(layer_sizes, train_loader, device)
 ae_model = AutoEncoder(layer_sizes)
 ae_loss_fn = nn.MSELoss()
@@ -63,17 +61,16 @@ ae_loss_fn = nn.MSELoss()
 # %%Model Training
 #----------------------------------------------------------------------------------
 
-# Set the max epochs for pretraining and training
-pretrain_epochs = 10
+# Set the max epochs for training
 train_epochs = 100
 
 # Register the start time
 start_time = time.time()
 
 # Run the training phase
-results_svdd_pd, sph_center, sph_radius = train_d_svdd_network(ae_model, ae_loss_fn, deep_svdd_loss, train_loader,
-                                                               nu=nu, gamma=gamma, epochs=train_epochs, device=device,
-                                                               d_svdd_type='one-class')
+results_svdd_pd, sph_center = train_d_svdd_network(ae_model, ae_loss_fn, deep_svdd_loss, train_loader,
+                                                   gamma=gamma, epochs=train_epochs, device=device)
+
 
 # Register the end time
 end_time = time.time()
@@ -83,9 +80,7 @@ print(f"Threads de OpenMP: {torch.get_num_threads()}")
 
 # %%Plot the results
 #----------------------------------------------------------------------------------
-
 plot_training_loss(results_svdd_pd)
-plot_d_svdd(data, ae_model, sph_center, sph_radius, device)
 
 # %%Evaluate the performance
 #----------------------------------------------------------------------------------

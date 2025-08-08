@@ -9,7 +9,6 @@ Deep Autoencoding Support Vector Data Description (DASVDD) is an unsupervised an
 The project includes:
 - Implementation of the DASVDD method based on the Hojjati and Armanfard (2023) paper
 - Modified autoencoder architecture with hypersphere constraint
-- Visualization tools for both latent space and data space
 - Evaluation metrics for anomaly detection performance
 
 ## Algorithm Description
@@ -86,7 +85,6 @@ All dependencies are listed in `requirements.txt`.
 You can customize the following parameters in `main.py`:
 
 - `latent_dim`: Dimension of the latent space (default: 2)
-- `nu`: Hyperparameter controlling the fraction of outliers (default: 0.05)
 - `train_epochs`: Number of epochs for DASVDD training (default: 100)
 - `batch_size`: Batch size for training (default: 32)
 - `gamma`: Weight parameter balancing reconstruction loss and hypersphere constraint
